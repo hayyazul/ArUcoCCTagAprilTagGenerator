@@ -6,6 +6,12 @@ import {
   listSquareFamilyNames,
   type MarkerProvider,
 } from "./families";
+import { CAMERA_PRESETS, findCameraPreset } from "./detection/cameras";
+import {
+  type CameraSpec,
+  estimateRange,
+  minTagSizeForDistance,
+} from "./detection/range";
 
 /** Build the `<select>` markup for the family picker, grouping consecutive
  *  families by their `group` label. Families without a group fall through into
@@ -228,19 +234,27 @@ function familyNotes(family: Family | undefined): {
   tagSize: string;
   totalSize: string;
   quietZoneAuto: string;
+  rangeFootnote: string;
 } {
   if (!family) {
     return {
       tagSize: "tag dimension",
       totalSize: "tag plus its quiet zone on every side; edit either, the other follows",
       quietZoneAuto: "auto = small cutting buffer outside the marker",
+      rangeFootnote: "pick a family to see detection thresholds",
     };
   }
+  const det = family.geometry.detection;
+  const rangeFootnote =
+    det.kind === "px-per-bit"
+      ? `${family.name}: ~${det.pxPerBitReliable} px/bit reliable, ~${det.pxPerBitEdge} px/bit edge (Olson)`
+      : `${family.name}: ≥${det.pxDiameterEdge} px outer disk (CCTag manual); reliable at ~${det.pxDiameterReliable} px`;
   if (family.group === "ArUco") {
     return {
       tagSize: "edge of the printed marker (black border included) — what detectors expect",
       totalSize: "marker plus its quiet zone on every side; edit either, the other follows",
       quietZoneAuto: "auto = ½ a bit-grid cell of the marker",
+      rangeFootnote,
     };
   }
   if (family.group === "CCTag") {
@@ -248,6 +262,7 @@ function familyNotes(family: Family | undefined): {
       tagSize: "diameter of the outer disk — what detectors measure",
       totalSize: "outer disk plus its quiet zone on every side; edit either, the other follows",
       quietZoneAuto: "auto = 10% of the outer disk diameter (small cutting buffer)",
+      rangeFootnote,
     };
   }
   // AprilTag (and any other square bit-grid families with an outer ring).
@@ -255,7 +270,153 @@ function familyNotes(family: Family | undefined): {
     tagSize: "canonical (black-border) edge — what detectors expect",
     totalSize: "tag plus its quiet zone on every side; edit either, the other follows",
     quietZoneAuto: "auto = ½ a bit-grid module (½ × tagSize / widthAtBorder)",
+    rangeFootnote,
   };
+}
+
+function buildRangeCardMarkup(): string {
+  const opts = CAMERA_PRESETS
+    .map((p) => `<option value="${p.id}">${p.label}</option>`)
+    .join("");
+  const def = CAMERA_PRESETS.find((p) => p.id === "iphone-wide") ?? CAMERA_PRESETS[0]!;
+  return `
+    <div class="range-card" aria-labelledby="range-card-heading">
+      <h4 id="range-card-heading">Detection range</h4>
+      <label>Camera
+        <select id="cameraPreset">${opts}</select>
+      </label>
+      <div>
+        <label class="range-inline">HFOV
+          <input id="cameraHfov" class="no-spin" type="number"
+                 min="1" max="179" step="0.5" value="${def.hfovDeg}">°
+        </label>
+        <label class="range-inline">Width
+          <input id="cameraWidth" class="no-spin" type="number"
+                 min="1" step="1" value="${def.widthPx}">px
+        </label>
+      </div>
+      <hr class="range-divider">
+      <div class="range-output">
+        <div class="label">Reliable</div><div class="value" id="rangeReliable">—</div>
+        <div class="label">Edge</div><div class="value" id="rangeEdge">—</div>
+      </div>
+      <div class="range-tilt" id="rangeTilt">—</div>
+      <hr class="range-divider">
+      <label class="range-inline">Size for
+        <input id="targetDistance" class="no-spin" type="number"
+               min="0.05" max="100" step="0.1" value="3.0">m
+      </label>
+      <div class="range-autosize">
+        <button id="applyTargetDistance" type="button">Apply →</button>
+        <span class="note" id="autosizeHint">sets tag size for reliable detection</span>
+      </div>
+      <div class="range-footnote" id="rangeFootnote">—</div>
+    </div>
+  `;
+}
+
+interface CameraFormState {
+  presetId: string;
+  hfovDeg: number;
+  widthPx: number;
+}
+
+function readCameraState(): CameraFormState {
+  return {
+    presetId: (field("cameraPreset") as HTMLSelectElement).value,
+    hfovDeg: Number.parseFloat(field("cameraHfov").value),
+    widthPx: Number.parseFloat(field("cameraWidth").value),
+  };
+}
+
+function applyCameraPreset(id: string): void {
+  const preset = findCameraPreset(id);
+  if (!preset || preset.id === "custom") return;
+  field("cameraHfov").value = String(preset.hfovDeg);
+  field("cameraWidth").value = String(preset.widthPx);
+}
+
+/** If HFOV / width no longer match the selected preset, switch the
+ *  preset dropdown to "custom" so the displayed state stays honest. */
+function syncCameraPresetFromInputs(): void {
+  const cam = readCameraState();
+  const preset = findCameraPreset(cam.presetId);
+  if (!preset || preset.id === "custom") return;
+  if (preset.hfovDeg !== cam.hfovDeg || preset.widthPx !== cam.widthPx) {
+    (field("cameraPreset") as HTMLSelectElement).value = "custom";
+  }
+}
+
+function formatRangeMetres(m: number): string {
+  if (!Number.isFinite(m) || m <= 0) return "—";
+  if (m < 1) return `${(m * 100).toFixed(0)} cm`;
+  if (m < 10) return `${m.toFixed(2)} m`;
+  return `${m.toFixed(1)} m`;
+}
+
+function updateRangeCard(
+  family: Family | undefined,
+  tagSize_mm: number,
+  notes: ReturnType<typeof familyNotes>,
+): void {
+  setNoteText("rangeFootnote", notes.rangeFootnote);
+  const reliableEl = document.getElementById("rangeReliable");
+  const edgeEl = document.getElementById("rangeEdge");
+  const tiltEl = document.getElementById("rangeTilt");
+  const applyBtn = document.getElementById("applyTargetDistance") as HTMLButtonElement | null;
+  if (!reliableEl || !edgeEl || !tiltEl) return;
+
+  const cam = readCameraState();
+  const camValid =
+    Number.isFinite(cam.hfovDeg) &&
+    cam.hfovDeg > 0 &&
+    cam.hfovDeg < 180 &&
+    Number.isFinite(cam.widthPx) &&
+    cam.widthPx > 0;
+  const tagValid = Number.isFinite(tagSize_mm) && tagSize_mm > 0;
+
+  if (!family || !camValid || !tagValid) {
+    reliableEl.textContent = "—";
+    edgeEl.textContent = "—";
+    tiltEl.textContent = "—";
+    if (applyBtn) applyBtn.disabled = !camValid || !family;
+    return;
+  }
+
+  const camera: CameraSpec = { hfovDeg: cam.hfovDeg, widthPx: cam.widthPx };
+  const r = estimateRange(family.geometry.detection, tagSize_mm, camera);
+  reliableEl.textContent = formatRangeMetres(r.reliable_m);
+  edgeEl.textContent = formatRangeMetres(r.edge_m);
+  tiltEl.textContent = `Up to ~${r.maxViewAngleDeg}° tilt`;
+  if (applyBtn) applyBtn.disabled = false;
+}
+
+function handleApplyTargetDistance(): void {
+  const s = readForm();
+  const family = getFamily(s.family);
+  if (!family) return;
+  const cam = readCameraState();
+  if (
+    !Number.isFinite(cam.hfovDeg) ||
+    cam.hfovDeg <= 0 ||
+    cam.hfovDeg >= 180 ||
+    !Number.isFinite(cam.widthPx) ||
+    cam.widthPx <= 0
+  ) {
+    return;
+  }
+  const target_m = Number.parseFloat(field("targetDistance").value);
+  if (!Number.isFinite(target_m) || target_m <= 0) return;
+  const newSize = minTagSizeForDistance(
+    family.geometry.detection,
+    target_m,
+    { hfovDeg: cam.hfovDeg, widthPx: cam.widthPx },
+    "reliable",
+  );
+  const tagInput = field("tagSize") as HTMLInputElement;
+  tagInput.value = String(newSize);
+  // Dispatch input so slider mirroring + form-level recompute pick it up.
+  tagInput.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 function setNoteText(id: string, text: string): void {
@@ -268,6 +429,12 @@ function updateFamilyNotes(family: Family | undefined): void {
   setNoteText("tagSize-note", n.tagSize);
   setNoteText("totalSize-note", n.totalSize);
   setNoteText("quietZone-note", n.quietZoneAuto);
+}
+
+function updateRangeFromForm(family: Family | undefined): void {
+  const s = readForm();
+  const notes = familyNotes(family);
+  updateRangeCard(family, s.tagSize_mm, notes);
 }
 
 function readForm(): FormState {
@@ -725,6 +892,8 @@ function recompute(): void {
   const s = readForm();
   const familyDef = getFamily(s.family);
   updateFamilyNotes(familyDef);
+  syncCameraPresetFromInputs();
+  updateRangeFromForm(familyDef);
   syncDependentFields(s, familyDef);
   // Update slider maxima now (using whatever paper / margins the user has set
   // so far) so the sliders track the current paper even while the form has
@@ -1233,18 +1402,23 @@ function bootstrap(): void {
           </fieldset>
           <fieldset class="tag-dim">
             <legend>Tag Dimensions</legend>
-            <label>Tag size (mm)
-              <input id="tagSize" class="no-spin" type="number" value="40" step="0.5" min="1">
-              <input id="tagSizeSlider" class="slider" type="range" min="10" max="200" step="0.1" value="40" aria-label="Tag size slider">
-              <span class="field-error" id="tagSize-err"></span>
-            </label>
-            <span class="note" id="tagSize-note">canonical (black-border) edge — what detectors expect</span>
-            <label>Total size (mm)
-              <input id="totalSize" class="no-spin" type="number" step="0.5" min="1">
-              <input id="totalSizeSlider" class="slider" type="range" min="10" max="300" step="0.1" value="40" aria-label="Total size slider">
-              <span class="field-error" id="totalSize-err"></span>
-            </label>
-            <span class="note" id="totalSize-note">tag plus its quiet zone on every side; edit either, the other follows</span>
+            <div class="tag-dim-row">
+              <div class="tag-dim-fields">
+                <label>Tag size (mm)
+                  <input id="tagSize" class="no-spin" type="number" value="40" step="0.5" min="1">
+                  <input id="tagSizeSlider" class="slider" type="range" min="10" max="200" step="0.1" value="40" aria-label="Tag size slider">
+                  <span class="field-error" id="tagSize-err"></span>
+                </label>
+                <span class="note" id="tagSize-note">canonical (black-border) edge — what detectors expect</span>
+                <label>Total size (mm)
+                  <input id="totalSize" class="no-spin" type="number" step="0.5" min="1">
+                  <input id="totalSizeSlider" class="slider" type="range" min="10" max="300" step="0.1" value="40" aria-label="Total size slider">
+                  <span class="field-error" id="totalSize-err"></span>
+                </label>
+                <span class="note" id="totalSize-note">tag plus its quiet zone on every side; edit either, the other follows</span>
+              </div>
+              ${buildRangeCardMarkup()}
+            </div>
             <details style="margin-top:0.5rem">
               <summary style="cursor:pointer">Advanced</summary>
               <div style="margin-top:0.4rem">
@@ -1306,6 +1480,12 @@ function bootstrap(): void {
   document.getElementById("totalSize")?.addEventListener("input", handleTotalSizeInput);
   bindSliderToNumber("tagSize", "tagSizeSlider");
   bindSliderToNumber("totalSize", "totalSizeSlider", handleTotalSizeInput);
+  document.getElementById("cameraPreset")?.addEventListener("change", (e) => {
+    applyCameraPreset((e.target as HTMLSelectElement).value);
+  });
+  document.getElementById("applyTargetDistance")?.addEventListener("click", () => {
+    handleApplyTargetDistance();
+  });
   form?.addEventListener("input", scheduleRecompute);
   form?.addEventListener("change", scheduleRecompute);
   document.getElementById("downloadBtn")?.addEventListener("click", () => {

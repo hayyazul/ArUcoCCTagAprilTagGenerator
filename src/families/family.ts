@@ -22,6 +22,41 @@
 import type { Canvas } from "../render/canvas";
 
 /**
+ * Detection threshold model. Per-family, used by the detection-range
+ * estimator. Two kinds cover everything currently shipped:
+ *
+ *  - `px-per-bit`: square / bit-grid detectors (AprilTag families and
+ *    ArUco). Range ∝ tagSize · f_px / (bits · pxPerBit). `bits` is the
+ *    detected edge in bit units; for shipped families it equals
+ *    `widthAtBorder`. Olson's rule of thumb: ~10 px/bit reliable,
+ *    ~5 px/bit edge. tagCircle families share the underlying detector
+ *    and use the same thresholds.
+ *  - `px-per-disk-diameter`: CCTag's concentric-ring detector. Range ∝
+ *    diskDiameter · f_px / pxDiameter. CCTag's manual quotes "no less
+ *    than ~30 px of radius for the external ring" — used here as the
+ *    edge threshold; reliable is set conservatively to ~100 px diameter.
+ *
+ * `maxViewAngleDeg` is the off-axis tilt (in degrees from frontal) up to
+ * which detection is considered reliable — informational only, not part
+ * of the numeric formula. Published values: ~60° for AprilTag/ArUco/
+ * tagCircle, ~80° for CCTag (designed for highly challenging conditions).
+ */
+export type DetectionModel =
+  | {
+      readonly kind: "px-per-bit";
+      readonly bits: number;
+      readonly pxPerBitReliable: number;
+      readonly pxPerBitEdge: number;
+      readonly maxViewAngleDeg: number;
+    }
+  | {
+      readonly kind: "px-per-disk-diameter";
+      readonly pxDiameterReliable: number;
+      readonly pxDiameterEdge: number;
+      readonly maxViewAngleDeg: number;
+    };
+
+/**
  * Static, per-family geometry. Describes the marker's drawable footprint
  * in dimensionless "cell" units; callers convert cells → millimetres via
  * a user-supplied tag size.
@@ -56,6 +91,10 @@ export interface FamilyGeometry {
    *  always-fixed centre block (in cell coordinates, row 0 at top) where
    *  a sub-marker can be inscribed. */
   readonly centerBlock?: { row: number; col: number; size: number };
+
+  /** Detection threshold model used by the range estimator. Mandatory:
+   *  every shipped family declares one of the supported kinds. */
+  readonly detection: DetectionModel;
 }
 
 /**

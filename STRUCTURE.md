@@ -23,6 +23,12 @@ printable PDFs of AprilTags. Four layers, each with a single responsibility:
 Shared utility: `src/tag-caption.ts` produces the human-readable tag label
 used by both renderers.
 
+Detection-range estimation (`src/detection/`) is a pure, side-product
+module that maps a family's `FamilyGeometry.detection` model + a camera
+spec (HFOV + image width) to a distance estimate. Used only by the UI
+sub-card inside the Tag Dimensions fieldset — does not touch layout or
+rendering.
+
 Build: Vite 5 · TypeScript 5 (strict) · Vitest 2 · ESLint 9 · Node 20.
 
 ## File Map
@@ -31,8 +37,8 @@ Build: Vite 5 · TypeScript 5 (strict) · Vitest 2 · ESLint 9 · Node 20.
 
 | File | Role |
 |------|------|
-| `src/main.ts` | Application entry point and UI orchestrator: builds the HTML form with recursive sub-tag UI, reads form state, validates inputs, calls `family.load(ids)` for every requested id (chunk-level lazy fetch), computes the layout plan, renders SVG previews (virtualized: paper-aspect placeholder sections for every page; IntersectionObserver streams real SVG into the in-viewport ones only — slider drags re-render just those 1–2 pages), and triggers PDF download. Readiness gating is per-(family, id) via `Family.isIdLoaded`. Also contains `familyNotes()` / `updateFamilyNotes()` which adapt the Tag Size, Total Size, and Quiet Zone help-text per selected family (AprilTag's black-border edge vs ArUco's full-marker edge vs CCTag's outer-disk diameter). |
-| `src/families/family.ts` | Core abstractions: `Marker` (polymorphic draw), `BitGridMarker` (bit-grid impl), `MarkerProvider` (renderer seam), `Family` (catalogue + lifecycle, with `load(ids?)` for per-id chunk loading and `isIdLoaded(id)` for the placeholder gate), `FamilyGeometry` (static per-family shape). |
+| `src/main.ts` | Application entry point and UI orchestrator: builds the HTML form with recursive sub-tag UI, reads form state, validates inputs, calls `family.load(ids)` for every requested id (chunk-level lazy fetch), computes the layout plan, renders SVG previews (virtualized: paper-aspect placeholder sections for every page; IntersectionObserver streams real SVG into the in-viewport ones only — slider drags re-render just those 1–2 pages), and triggers PDF download. Readiness gating is per-(family, id) via `Family.isIdLoaded`. Also contains `familyNotes()` / `updateFamilyNotes()` which adapt the Tag Size, Total Size, Quiet Zone, and Detection-Range help-text per selected family (AprilTag's black-border edge vs ArUco's full-marker edge vs CCTag's outer-disk diameter). Also renders the Detection Range sub-card inside `<fieldset class="tag-dim">` via `buildRangeCardMarkup()`, with `readCameraState()` / `updateRangeCard()` driving the live readout each `recompute()` and `handleApplyTargetDistance()` writing back to `tagSize`. |
+| `src/families/family.ts` | Core abstractions: `Marker` (polymorphic draw), `BitGridMarker` (bit-grid impl), `MarkerProvider` (renderer seam), `Family` (catalogue + lifecycle, with `load(ids?)` for per-id chunk loading and `isIdLoaded(id)` for the placeholder gate), `FamilyGeometry` (static per-family shape, including a mandatory `DetectionModel` consumed by the range estimator), and the `DetectionModel` union (`px-per-bit` for AprilTag/ArUco, `px-per-disk-diameter` for CCTag). |
 | `src/families/index.ts` | Module-level registry: instantiates one `MosaicFamily` per AprilTag variant (all with `group: "AprilTag"` so they collapse into a single `<optgroup>`), one `ArucoFamily` per ArUco dictionary, and two `CCTagFamily` instances. Exposes `getFamily` / `listFamilies` / `listFamilyNames` / `listFamiliesByGroup` / `isRecursiveFamily` / `listSquareFamilyNames`. |
 | `src/families/aruco-family.ts` | `ArucoFamily` (`Family` impl): fetches an ArUco dictionary JSON, lazily builds `BitGridMarker`s of edge `gridSize + 2` (data grid + 1-cell black border). Pure `buildArucoBits` helper handles the source's `0=black` → project's `true=black` inversion. |
 | `src/families/aruco-family.test.ts` | Unit tests for `ArucoFamily`: border ring, bit inversion, lifecycle, RangeError on bad id, registry integration (18 dictionaries under the `ArUco` group). |
@@ -69,6 +75,10 @@ Build: Vite 5 · TypeScript 5 (strict) · Vitest 2 · ESLint 9 · Node 20.
 | `src/render/pdf.test.ts` | Unit tests for PDF rendering: round-trip parse validation, page sizing, placeholder rendering, back-page generation, circular quiet-zone labels, and subtag support. |
 | `src/tag-caption.ts` | Shared utility producing the one-line tag identification string (e.g. "tag36h11 #5 · 40 mm") and a size formatter, consumed by both renderers. |
 | `src/tag-caption.test.ts` | Unit tests for `formatTagSize` (decimal rounding) and `tagCaptionLine` (combined label output). |
+| `src/detection/range.ts` | Pure detection-range estimator: `focalLengthPx` (pinhole from HFOV + width), `estimateRange` (reliable + edge distances for the family's `DetectionModel`), and `minTagSizeForDistance` (inverse, rounded up to 0.5 mm) for the auto-size button. Loud on invalid input. |
+| `src/detection/range.test.ts` | Unit tests for `focalLengthPx`, `estimateRange` (both px-per-bit and px-per-disk-diameter kinds, with concrete worked examples), and `minTagSizeForDistance` (round-trip, edge vs reliable, rounding). |
+| `src/detection/cameras.ts` | Camera preset table (9 entries: Custom, iPhone wide / ultra-wide, Logitech C920, generic 720p webcam, Raspberry Pi v2 / v3 wide, Intel RealSense D435, GoPro Hero) plus `findCameraPreset` lookup. Each preset is an `(id, label, hfovDeg, widthPx)`. |
+| `src/detection/cameras.test.ts` | Sanity tests for `CAMERA_PRESETS`: non-empty, Custom first, unique ids, positive integer widths, HFOV in (0, 180). |
 
 ### Root Configuration
 

@@ -107,6 +107,22 @@ describe("ArucoFamily", () => {
     expect(f.geometry.outerShape).toBe("square");
   });
 
+  it("declares a px-per-bit detection model with bits = edge", () => {
+    const f = new ArucoFamily({
+      name: "aruco_5x5_50",
+      gridSize: 5,
+      count: 50,
+      jsonPath: "test.json",
+    });
+    expect(f.geometry.detection).toEqual({
+      kind: "px-per-bit",
+      bits: 7,
+      pxPerBitReliable: 10,
+      pxPerBitEdge: 5,
+      maxViewAngleDeg: 60,
+    });
+  });
+
   it("throws RangeError on out-of-range id", async () => {
     installFakeFetch({
       jsonBody: {

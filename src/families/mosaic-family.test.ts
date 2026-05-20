@@ -107,6 +107,13 @@ const squareGeometry: FamilyGeometry = {
   edge: 4,
   widthAtBorder: 4,
   outerShape: "square",
+  detection: {
+    kind: "px-per-bit",
+    bits: 4,
+    pxPerBitReliable: 10,
+    pxPerBitEdge: 5,
+    maxViewAngleDeg: 60,
+  },
 };
 
 function makeSingleChunkFamily(): MosaicFamily {
@@ -239,5 +246,22 @@ describe("MosaicFamily (chunked) — happy-path single-chunk", () => {
           chunkBasePath: "/bad",
         }),
     ).toThrow(/chunkSize/);
+  });
+});
+
+describe("AprilTag registry — detection model", () => {
+  it("every shipped AprilTag family declares px-per-bit with bits = widthAtBorder", async () => {
+    const { listFamiliesByGroup } = await import("./index");
+    const apriltag = listFamiliesByGroup().get("AprilTag") ?? [];
+    expect(apriltag.length).toBeGreaterThan(0);
+    for (const f of apriltag) {
+      const d = f.geometry.detection;
+      expect(d.kind).toBe("px-per-bit");
+      if (d.kind !== "px-per-bit") continue;
+      expect(d.bits).toBe(f.geometry.widthAtBorder);
+      expect(d.pxPerBitReliable).toBe(10);
+      expect(d.pxPerBitEdge).toBe(5);
+      expect(d.maxViewAngleDeg).toBe(60);
+    }
   });
 });
