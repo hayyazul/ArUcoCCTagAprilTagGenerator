@@ -282,28 +282,26 @@ function buildRangeEstimatorMarkup(): string {
     <fieldset>
       <legend>Detection Range</legend>
       <div style="margin-bottom:0.35rem">
-        <span id="rangeReliableReadout">—</span>
+        Reliably detected up to
+        <input id="rangeReliableInput" class="no-spin" type="number"
+               min="0.05" max="100" step="0.1" style="width:4em; margin:0 0.25rem"> m away
         <span class="note" id="rangeTilt" style="display:inline; margin-left:0.4rem">—</span>
       </div>
       <label>Camera
         <select id="cameraPreset">${opts}</select>
       </label>
-      <label>HFOV
-        <input id="cameraHfov" class="no-spin" type="number"
-               min="1" max="179" step="0.5" value="${def.hfovDeg}">°
-      </label>
-      <label>Width
-        <input id="cameraWidth" class="no-spin" type="number"
-               min="1" step="1" value="${def.widthPx}">px
-      </label>
+      <div style="margin-top:0.25rem">
+        <label>HFOV
+          <input id="cameraHfov" class="no-spin" type="number"
+                 min="1" max="179" step="0.5" value="${def.hfovDeg}" style="width:4em; margin:0 0.25rem"> °
+        </label>
+        <label style="margin-left:0.6rem">Width
+          <input id="cameraWidth" class="no-spin" type="number"
+                 min="1" step="1" value="${def.widthPx}" style="width:4em; margin:0 0.25rem"> px
+        </label>
+      </div>
       <div style="margin-top:0.4rem">
         <label><input type="checkbox" id="rangeOverride"> Set tag size from distance</label>
-      </div>
-      <div id="rangeOverrideRow" style="display:none; margin-top:0.3rem">
-        <label>Reliable up to
-          <input id="rangeReliableInput" class="no-spin" type="number"
-                 min="0.05" max="100" step="0.1"> m
-        </label>
       </div>
       <span class="note" id="rangeFootnote" style="margin-top:0.35rem">—</span>
     </fieldset>
@@ -354,12 +352,12 @@ function updateRangeEstimator(
   notes: ReturnType<typeof familyNotes>,
 ): void {
   setNoteText("rangeFootnote", notes.rangeFootnote);
-  const readout = document.getElementById("rangeReliableReadout");
   const tiltEl = document.getElementById("rangeTilt");
   const reliableInput = document.getElementById("rangeReliableInput") as HTMLInputElement | null;
   const overrideBox = document.getElementById("rangeOverride") as HTMLInputElement | null;
-  const overrideRow = document.getElementById("rangeOverrideRow");
-  if (!readout || !tiltEl || !reliableInput || !overrideBox || !overrideRow) return;
+  const hfovEl = document.getElementById("cameraHfov") as HTMLInputElement | null;
+  const widthEl = document.getElementById("cameraWidth") as HTMLInputElement | null;
+  if (!tiltEl || !reliableInput || !overrideBox || !hfovEl || !widthEl) return;
 
   const cam = readCameraState();
   const camValid =
@@ -370,30 +368,29 @@ function updateRangeEstimator(
     cam.widthPx > 0;
   const tagValid = Number.isFinite(tagSize_mm) && tagSize_mm > 0;
   const hasFamily = family !== undefined;
+  const isCustom = cam.presetId === "custom";
 
-  // Toggle the advanced row
-  overrideRow.style.display = overrideBox.checked ? "" : "none";
+  // Grey out HFOV/Width when a preset is selected (only Custom is editable)
+  hfovEl.disabled = !isCustom;
+  widthEl.disabled = !isCustom;
+  // Reliable distance input is greyed until the override is checked
   reliableInput.disabled = !overrideBox.checked || !camValid || !hasFamily;
 
   if (!hasFamily) {
-    readout.textContent = "—";
-    tiltEl.textContent = "—";
     if (document.activeElement !== reliableInput) reliableInput.value = "";
+    tiltEl.textContent = "—";
     return;
   }
   if (!camValid || !tagValid) {
-    readout.textContent = "—";
-    tiltEl.textContent = "—";
     if (document.activeElement !== reliableInput) reliableInput.value = "";
+    tiltEl.textContent = "—";
     return;
   }
 
   const camera: CameraSpec = { hfovDeg: cam.hfovDeg, widthPx: cam.widthPx };
   const r = estimateRange(family.geometry.detection, tagSize_mm, camera);
-  // Always-visible readout, e.g. "Reliable up to 1.62 m at 40 mm"
-  readout.textContent = `Reliable up to ${formatDistanceInput(r.reliable_m)} m at ${tagSize_mm.toFixed(1)} mm`;
   tiltEl.textContent = `· up to ~${r.maxViewAngleDeg}° tilt`;
-  // Sync the gated input when not being edited
+  // Sync the input when not being edited — shows the computed distance even while disabled
   if (document.activeElement !== reliableInput) {
     reliableInput.value = formatDistanceInput(r.reliable_m);
   }
