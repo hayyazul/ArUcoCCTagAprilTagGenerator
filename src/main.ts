@@ -274,44 +274,51 @@ function familyNotes(family: Family | undefined): {
   };
 }
 
-function buildRangeCardMarkup(): string {
+function buildRangeEstimatorMarkup(): string {
   const opts = CAMERA_PRESETS
     .map((p) => `<option value="${p.id}">${p.label}</option>`)
     .join("");
   const def = CAMERA_PRESETS.find((p) => p.id === "iphone-wide") ?? CAMERA_PRESETS[0]!;
   return `
-    <div class="range-card" aria-labelledby="range-card-heading">
-      <h4 id="range-card-heading">Detection range</h4>
-      <label>Camera
-        <select id="cameraPreset">${opts}</select>
-      </label>
-      <div>
-        <label class="range-inline">HFOV
-          <input id="cameraHfov" class="no-spin" type="number"
-                 min="1" max="179" step="0.5" value="${def.hfovDeg}">°
-        </label>
-        <label class="range-inline">Width
-          <input id="cameraWidth" class="no-spin" type="number"
-                 min="1" step="1" value="${def.widthPx}">px
-        </label>
-      </div>
-      <hr class="range-divider">
-      <div class="range-output">
-        <div class="label">Reliable</div><div class="value" id="rangeReliable">—</div>
-        <div class="label">Edge</div><div class="value" id="rangeEdge">—</div>
-      </div>
-      <div class="range-tilt" id="rangeTilt">—</div>
-      <hr class="range-divider">
-      <label class="range-inline">Size for
-        <input id="targetDistance" class="no-spin" type="number"
-               min="0.05" max="100" step="0.1" value="3.0">m
-      </label>
-      <div class="range-autosize">
-        <button id="applyTargetDistance" type="button">Apply →</button>
-        <span class="note" id="autosizeHint">sets tag size for reliable detection</span>
-      </div>
-      <div class="range-footnote" id="rangeFootnote">—</div>
-    </div>
+    <fieldset>
+      <legend>Detection Range — Estimator</legend>
+      <span class="note">How far this size can be detected depends on the viewing camera. Numbers are a resolution-based ceiling — lighting, motion blur, focus, or glare only shorten them.</span>
+      <details>
+        <summary style="cursor:pointer">Show estimator</summary>
+        <div style="margin-top:0.5rem">
+          <label>Camera
+            <select id="cameraPreset">${opts}</select>
+          </label>
+          <span class="note">Presets are nominal manufacturer specs; edit HFOV/width to match your camera.</span>
+          <div>
+            <label>HFOV
+              <input id="cameraHfov" class="no-spin" type="number"
+                     min="1" max="179" step="0.5" value="${def.hfovDeg}">°
+            </label>
+            <label>Width
+              <input id="cameraWidth" class="no-spin" type="number"
+                     min="1" step="1" value="${def.widthPx}">px
+            </label>
+          </div>
+          <span class="note">Pinhole focal length ≈ (width/2)/tan(HFOV/2); no distortion model.</span>
+          <div style="margin-top:0.5rem">
+            <label>Reliable up to
+              <input id="rangeReliableInput" class="no-spin" type="number"
+                     min="0.05" max="100" step="0.1"> m
+            </label>
+            <span class="note">High confidence — about 10 px per bit (AprilTag/ArUco) or ~100 px outer diameter (CCTag). Stable detection; edit the distance to resize the tag.</span>
+            <label>Edge (last-ditch) up to
+              <input id="rangeEdgeInput" class="no-spin" type="number"
+                     min="0.05" max="100" step="0.1"> m
+            </label>
+            <span class="note">Minimal — about 5 px per bit or ~60 px diameter. May detect but misses climb; beyond this it usually fails. Edit to resize.</span>
+          </div>
+          <span class="note" id="rangeTilt">—</span>
+          <span class="note" id="rangeFootnote">—</span>
+          <span class="note">Sources: AprilTag — Olson 2011 “AprilTag: A robust and flexible visual fiducial system” (~10 px/bit reliable, ~5 px/bit edge); CCTag — manual “no less than ~30 px radius for the external ring” (edge ≈60 px diam, reliable ≈100 px diam, conservative). Tilt limit is informational, not in the formula.</span>
+        </div>
+      </details>
+    </fieldset>
   `;
 }
 
@@ -347,24 +354,22 @@ function syncCameraPresetFromInputs(): void {
   }
 }
 
-function formatRangeMetres(m: number): string {
-  if (!Number.isFinite(m) || m <= 0) return "—";
-  if (m < 1) return `${(m * 100).toFixed(0)} cm`;
-  if (m < 10) return `${m.toFixed(2)} m`;
-  return `${m.toFixed(1)} m`;
+function formatDistanceInput(m: number): string {
+  if (!Number.isFinite(m) || m <= 0) return "";
+  if (m < 10) return m.toFixed(2);
+  return m.toFixed(1);
 }
 
-function updateRangeCard(
+function updateRangeEstimator(
   family: Family | undefined,
   tagSize_mm: number,
   notes: ReturnType<typeof familyNotes>,
 ): void {
   setNoteText("rangeFootnote", notes.rangeFootnote);
-  const reliableEl = document.getElementById("rangeReliable");
-  const edgeEl = document.getElementById("rangeEdge");
+  const reliableInput = document.getElementById("rangeReliableInput") as HTMLInputElement | null;
+  const edgeInput = document.getElementById("rangeEdgeInput") as HTMLInputElement | null;
   const tiltEl = document.getElementById("rangeTilt");
-  const applyBtn = document.getElementById("applyTargetDistance") as HTMLButtonElement | null;
-  if (!reliableEl || !edgeEl || !tiltEl) return;
+  if (!reliableInput || !edgeInput || !tiltEl) return;
 
   const cam = readCameraState();
   const camValid =
@@ -376,22 +381,29 @@ function updateRangeCard(
   const tagValid = Number.isFinite(tagSize_mm) && tagSize_mm > 0;
 
   if (!family || !camValid || !tagValid) {
-    reliableEl.textContent = "—";
-    edgeEl.textContent = "—";
+    if (document.activeElement !== reliableInput) reliableInput.value = "";
+    if (document.activeElement !== edgeInput) edgeInput.value = "";
     tiltEl.textContent = "—";
-    if (applyBtn) applyBtn.disabled = !camValid || !family;
+    reliableInput.disabled = !camValid || !family;
+    edgeInput.disabled = !camValid || !family;
     return;
   }
 
   const camera: CameraSpec = { hfovDeg: cam.hfovDeg, widthPx: cam.widthPx };
   const r = estimateRange(family.geometry.detection, tagSize_mm, camera);
-  reliableEl.textContent = formatRangeMetres(r.reliable_m);
-  edgeEl.textContent = formatRangeMetres(r.edge_m);
-  tiltEl.textContent = `Up to ~${r.maxViewAngleDeg}° tilt`;
-  if (applyBtn) applyBtn.disabled = false;
+  // Don't clobber the field the user is currently typing in.
+  if (document.activeElement !== reliableInput) {
+    reliableInput.value = formatDistanceInput(r.reliable_m);
+  }
+  if (document.activeElement !== edgeInput) {
+    edgeInput.value = formatDistanceInput(r.edge_m);
+  }
+  reliableInput.disabled = false;
+  edgeInput.disabled = false;
+  tiltEl.textContent = `Up to ~${r.maxViewAngleDeg}° tilt — informational, not in the distance formula`;
 }
 
-function handleApplyTargetDistance(): void {
+function handleRangeDistanceInput(threshold: "reliable" | "edge"): void {
   const s = readForm();
   const family = getFamily(s.family);
   if (!family) return;
@@ -405,17 +417,17 @@ function handleApplyTargetDistance(): void {
   ) {
     return;
   }
-  const target_m = Number.parseFloat(field("targetDistance").value);
+  const id = threshold === "reliable" ? "rangeReliableInput" : "rangeEdgeInput";
+  const target_m = Number.parseFloat((document.getElementById(id) as HTMLInputElement | null)?.value ?? "");
   if (!Number.isFinite(target_m) || target_m <= 0) return;
   const newSize = minTagSizeForDistance(
     family.geometry.detection,
     target_m,
     { hfovDeg: cam.hfovDeg, widthPx: cam.widthPx },
-    "reliable",
+    threshold,
   );
   const tagInput = field("tagSize") as HTMLInputElement;
   tagInput.value = String(newSize);
-  // Dispatch input so slider mirroring + form-level recompute pick it up.
   tagInput.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
@@ -434,7 +446,7 @@ function updateFamilyNotes(family: Family | undefined): void {
 function updateRangeFromForm(family: Family | undefined): void {
   const s = readForm();
   const notes = familyNotes(family);
-  updateRangeCard(family, s.tagSize_mm, notes);
+  updateRangeEstimator(family, s.tagSize_mm, notes);
 }
 
 function readForm(): FormState {
@@ -1402,23 +1414,18 @@ function bootstrap(): void {
           </fieldset>
           <fieldset class="tag-dim">
             <legend>Tag Dimensions</legend>
-            <div class="tag-dim-row">
-              <div class="tag-dim-fields">
-                <label>Tag size (mm)
-                  <input id="tagSize" class="no-spin" type="number" value="40" step="0.5" min="1">
-                  <input id="tagSizeSlider" class="slider" type="range" min="10" max="200" step="0.1" value="40" aria-label="Tag size slider">
-                  <span class="field-error" id="tagSize-err"></span>
-                </label>
-                <span class="note" id="tagSize-note">canonical (black-border) edge — what detectors expect</span>
-                <label>Total size (mm)
-                  <input id="totalSize" class="no-spin" type="number" step="0.5" min="1">
-                  <input id="totalSizeSlider" class="slider" type="range" min="10" max="300" step="0.1" value="40" aria-label="Total size slider">
-                  <span class="field-error" id="totalSize-err"></span>
-                </label>
-                <span class="note" id="totalSize-note">tag plus its quiet zone on every side; edit either, the other follows</span>
-              </div>
-              ${buildRangeCardMarkup()}
-            </div>
+            <label>Tag size (mm)
+              <input id="tagSize" class="no-spin" type="number" value="40" step="0.5" min="1">
+              <input id="tagSizeSlider" class="slider" type="range" min="10" max="200" step="0.1" value="40" aria-label="Tag size slider">
+              <span class="field-error" id="tagSize-err"></span>
+            </label>
+            <span class="note" id="tagSize-note">canonical (black-border) edge — what detectors expect</span>
+            <label>Total size (mm)
+              <input id="totalSize" class="no-spin" type="number" step="0.5" min="1">
+              <input id="totalSizeSlider" class="slider" type="range" min="10" max="300" step="0.1" value="40" aria-label="Total size slider">
+              <span class="field-error" id="totalSize-err"></span>
+            </label>
+            <span class="note" id="totalSize-note">tag plus its quiet zone on every side; edit either, the other follows</span>
             <details style="margin-top:0.5rem">
               <summary style="cursor:pointer">Advanced</summary>
               <div style="margin-top:0.4rem">
@@ -1438,6 +1445,7 @@ function bootstrap(): void {
               </div>
             </details>
           </fieldset>
+          ${buildRangeEstimatorMarkup()}
           <fieldset>
             <legend>Output</legend>
             <div>
@@ -1483,8 +1491,13 @@ function bootstrap(): void {
   document.getElementById("cameraPreset")?.addEventListener("change", (e) => {
     applyCameraPreset((e.target as HTMLSelectElement).value);
   });
-  document.getElementById("applyTargetDistance")?.addEventListener("click", () => {
-    handleApplyTargetDistance();
+  // Editing a distance recomputes the tag size for that threshold; the
+  // resulting tagSize input event then drives the normal recompute.
+  document.getElementById("rangeReliableInput")?.addEventListener("input", () => {
+    handleRangeDistanceInput("reliable");
+  });
+  document.getElementById("rangeEdgeInput")?.addEventListener("input", () => {
+    handleRangeDistanceInput("edge");
   });
   form?.addEventListener("input", scheduleRecompute);
   form?.addEventListener("change", scheduleRecompute);
