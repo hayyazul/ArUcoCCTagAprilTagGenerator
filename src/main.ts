@@ -283,7 +283,7 @@ function buildRangeEstimatorMarkup(): string {
       <legend>Detection Range</legend>
       <div style="margin-bottom:0.35rem">
         Reliably detected up to
-        <span id="rangeReliableText" style="color:#888">—</span>
+        <span id="rangeReliableText">—</span>
         <input id="rangeReliableInput" class="no-spin" type="number"
                min="0.05" max="100" step="0.1" style="width:4em; display:none"> m away
         <span class="note" id="rangeTilt" style="display:inline; margin-left:0.4rem">—</span>
