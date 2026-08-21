@@ -58,7 +58,21 @@ export class ArucoFamily implements Family {
     this.gridSize = opts.gridSize;
     this.jsonPath = opts.jsonPath;
     const edge = opts.gridSize + 2;
-    this.geometry = { edge, widthAtBorder: edge, outerShape: "square" };
+    // ArUco shares the AprilTag-style px/bit detection floor: a square
+    // binary fiducial decoded by sampling each cell. `bits` is the full
+    // edge including the 1-bit black border (= `edge` here).
+    this.geometry = {
+      edge,
+      widthAtBorder: edge,
+      outerShape: "square",
+      detection: {
+        kind: "px-per-bit",
+        bits: edge,
+        pxPerBitReliable: 10,
+        pxPerBitEdge: 5,
+        maxViewAngleDeg: 60,
+      },
+    };
   }
 
   load(_ids?: readonly number[]): Promise<void> {

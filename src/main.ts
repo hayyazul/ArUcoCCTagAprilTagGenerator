@@ -6,6 +6,12 @@ import {
   listSquareFamilyNames,
   type MarkerProvider,
 } from "./families";
+import { CAMERA_PRESETS, findCameraPreset } from "./detection/cameras";
+import {
+  type CameraSpec,
+  estimateRange,
+  minTagSizeForDistance,
+} from "./detection/range";
 
 /** Build the `<select>` markup for the family picker, grouping consecutive
  *  families by their `group` label. Families without a group fall through into
@@ -228,19 +234,26 @@ function familyNotes(family: Family | undefined): {
   tagSize: string;
   totalSize: string;
   quietZoneAuto: string;
+  rangeFootnote: string;
 } {
   if (!family) {
     return {
       tagSize: "tag dimension",
       totalSize: "tag plus its quiet zone on every side; edit either, the other follows",
       quietZoneAuto: "auto = small cutting buffer outside the marker",
+      rangeFootnote: "",
     };
   }
+  // Detection footnote is intentionally empty in-box; full sources live in
+  // the footer Related links. Keep the field for future per-family hints
+  // without cluttering the estimator.
+  const rangeFootnote = "";
   if (family.group === "ArUco") {
     return {
       tagSize: "edge of the printed marker (black border included) — what detectors expect",
       totalSize: "marker plus its quiet zone on every side; edit either, the other follows",
       quietZoneAuto: "auto = ½ a bit-grid cell of the marker",
+      rangeFootnote,
     };
   }
   if (family.group === "CCTag") {
@@ -248,6 +261,7 @@ function familyNotes(family: Family | undefined): {
       tagSize: "diameter of the outer disk — what detectors measure",
       totalSize: "outer disk plus its quiet zone on every side; edit either, the other follows",
       quietZoneAuto: "auto = 10% of the outer disk diameter (small cutting buffer)",
+      rangeFootnote,
     };
   }
   // AprilTag (and any other square bit-grid families with an outer ring).
@@ -255,7 +269,172 @@ function familyNotes(family: Family | undefined): {
     tagSize: "canonical (black-border) edge — what detectors expect",
     totalSize: "tag plus its quiet zone on every side; edit either, the other follows",
     quietZoneAuto: "auto = ½ a bit-grid module (½ × tagSize / widthAtBorder)",
+    rangeFootnote,
   };
+}
+
+function buildRangeEstimatorMarkup(): string {
+  const opts = CAMERA_PRESETS
+    .map((p) => `<option value="${p.id}">${p.label}</option>`)
+    .join("");
+  const def = CAMERA_PRESETS.find((p) => p.id === "iphone-wide") ?? CAMERA_PRESETS[0]!;
+  return `
+    <fieldset>
+      <legend>Detection Range</legend>
+      <div style="margin-bottom:0.35rem">
+        Reliably detected up to
+        <span id="rangeReliableText">—</span>
+        <input id="rangeReliableInput" class="no-spin" type="number"
+               min="0.05" max="100" step="0.1" style="width:4em; display:none"> m away
+        <span class="note" id="rangeTilt" style="display:inline; margin-left:0.4rem">—</span>
+      </div>
+      <label>Camera
+        <select id="cameraPreset">${opts}</select>
+      </label>
+      <div style="margin-top:0.25rem">
+        <label>HFOV
+          <input id="cameraHfov" class="no-spin" type="number"
+                 min="1" max="179" step="0.5" value="${def.hfovDeg}" style="width:4em"> °
+        </label>
+        <label style="margin-left:0.6rem">Width
+          <input id="cameraWidth" class="no-spin" type="number"
+                 min="1" step="1" value="${def.widthPx}" style="width:4em"> px
+        </label>
+      </div>
+      <div style="margin-top:0.4rem">
+        <label><input type="checkbox" id="rangeOverride"> Set tag size from distance</label>
+      </div>
+      <span class="note" id="rangeFootnote" style="margin-top:0.35rem">—</span>
+    </fieldset>
+  `;
+}
+
+interface CameraFormState {
+  presetId: string;
+  hfovDeg: number;
+  widthPx: number;
+}
+
+function readCameraState(): CameraFormState {
+  return {
+    presetId: (field("cameraPreset") as HTMLSelectElement).value,
+    hfovDeg: Number.parseFloat(field("cameraHfov").value),
+    widthPx: Number.parseFloat(field("cameraWidth").value),
+  };
+}
+
+function applyCameraPreset(id: string): void {
+  const preset = findCameraPreset(id);
+  if (!preset || preset.id === "custom") return;
+  field("cameraHfov").value = String(preset.hfovDeg);
+  field("cameraWidth").value = String(preset.widthPx);
+}
+
+/** If HFOV / width no longer match the selected preset, switch the
+ *  preset dropdown to "custom" so the displayed state stays honest. */
+function syncCameraPresetFromInputs(): void {
+  const cam = readCameraState();
+  const preset = findCameraPreset(cam.presetId);
+  if (!preset || preset.id === "custom") return;
+  if (preset.hfovDeg !== cam.hfovDeg || preset.widthPx !== cam.widthPx) {
+    (field("cameraPreset") as HTMLSelectElement).value = "custom";
+  }
+}
+
+function formatDistanceInput(m: number): string {
+  if (!Number.isFinite(m) || m <= 0) return "";
+  if (m < 10) return m.toFixed(2);
+  return m.toFixed(1);
+}
+
+function updateRangeEstimator(
+  family: Family | undefined,
+  tagSize_mm: number,
+  notes: ReturnType<typeof familyNotes>,
+): void {
+  setNoteText("rangeFootnote", notes.rangeFootnote);
+  const tiltEl = document.getElementById("rangeTilt");
+  const reliableInput = document.getElementById("rangeReliableInput") as HTMLInputElement | null;
+  const reliableText = document.getElementById("rangeReliableText") as HTMLElement | null;
+  const overrideBox = document.getElementById("rangeOverride") as HTMLInputElement | null;
+  const hfovEl = document.getElementById("cameraHfov") as HTMLInputElement | null;
+  const widthEl = document.getElementById("cameraWidth") as HTMLInputElement | null;
+  if (!tiltEl || !reliableInput || !reliableText || !overrideBox || !hfovEl || !widthEl) return;
+
+  const cam = readCameraState();
+  const camValid =
+    Number.isFinite(cam.hfovDeg) &&
+    cam.hfovDeg > 0 &&
+    cam.hfovDeg < 180 &&
+    Number.isFinite(cam.widthPx) &&
+    cam.widthPx > 0;
+  const tagValid = Number.isFinite(tagSize_mm) && tagSize_mm > 0;
+  const hasFamily = family !== undefined;
+  const isCustom = cam.presetId === "custom";
+
+  // Grey out HFOV/Width when a preset is selected (only Custom is editable)
+  hfovEl.disabled = !isCustom;
+  widthEl.disabled = !isCustom;
+
+  // Toggle between plain text (greyed) and input box based on override
+  const editing = overrideBox.checked;
+  reliableText.style.display = editing ? "none" : "";
+  reliableInput.style.display = editing ? "" : "none";
+  reliableInput.disabled = !editing || !camValid || !hasFamily;
+
+  if (!hasFamily) {
+    reliableText.textContent = "—";
+    if (document.activeElement !== reliableInput) reliableInput.value = "";
+    tiltEl.textContent = "—";
+    return;
+  }
+  if (!camValid || !tagValid) {
+    reliableText.textContent = "—";
+    if (document.activeElement !== reliableInput) reliableInput.value = "";
+    tiltEl.textContent = "—";
+    return;
+  }
+
+  const camera: CameraSpec = { hfovDeg: cam.hfovDeg, widthPx: cam.widthPx };
+  const r = estimateRange(family.geometry.detection, tagSize_mm, camera);
+  const distStr = formatDistanceInput(r.reliable_m);
+  reliableText.textContent = distStr || "—";
+  tiltEl.textContent = `· up to ~${r.maxViewAngleDeg}° tilt`;
+  // Sync the input when not being edited — shows the computed distance when editable
+  if (document.activeElement !== reliableInput) {
+    reliableInput.value = distStr;
+  }
+}
+
+function handleRangeDistanceInput(): void {
+  const overrideBox = document.getElementById("rangeOverride") as HTMLInputElement | null;
+  if (!overrideBox?.checked) return;
+  const s = readForm();
+  const family = getFamily(s.family);
+  if (!family) return;
+  const cam = readCameraState();
+  if (
+    !Number.isFinite(cam.hfovDeg) ||
+    cam.hfovDeg <= 0 ||
+    cam.hfovDeg >= 180 ||
+    !Number.isFinite(cam.widthPx) ||
+    cam.widthPx <= 0
+  ) {
+    return;
+  }
+  const target_m = Number.parseFloat(
+    (document.getElementById("rangeReliableInput") as HTMLInputElement | null)?.value ?? "",
+  );
+  if (!Number.isFinite(target_m) || target_m <= 0) return;
+  const newSize = minTagSizeForDistance(
+    family.geometry.detection,
+    target_m,
+    { hfovDeg: cam.hfovDeg, widthPx: cam.widthPx },
+    "reliable",
+  );
+  const tagInput = field("tagSize") as HTMLInputElement;
+  tagInput.value = String(newSize);
+  tagInput.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 function setNoteText(id: string, text: string): void {
@@ -268,6 +447,12 @@ function updateFamilyNotes(family: Family | undefined): void {
   setNoteText("tagSize-note", n.tagSize);
   setNoteText("totalSize-note", n.totalSize);
   setNoteText("quietZone-note", n.quietZoneAuto);
+}
+
+function updateRangeFromForm(family: Family | undefined): void {
+  const s = readForm();
+  const notes = familyNotes(family);
+  updateRangeEstimator(family, s.tagSize_mm, notes);
 }
 
 function readForm(): FormState {
@@ -725,6 +910,8 @@ function recompute(): void {
   const s = readForm();
   const familyDef = getFamily(s.family);
   updateFamilyNotes(familyDef);
+  syncCameraPresetFromInputs();
+  updateRangeFromForm(familyDef);
   syncDependentFields(s, familyDef);
   // Update slider maxima now (using whatever paper / margins the user has set
   // so far) so the sliders track the current paper even while the form has
@@ -1264,6 +1451,7 @@ function bootstrap(): void {
               </div>
             </details>
           </fieldset>
+          ${buildRangeEstimatorMarkup()}
           <fieldset>
             <legend>Output</legend>
             <div>
@@ -1306,6 +1494,18 @@ function bootstrap(): void {
   document.getElementById("totalSize")?.addEventListener("input", handleTotalSizeInput);
   bindSliderToNumber("tagSize", "tagSizeSlider");
   bindSliderToNumber("totalSize", "totalSizeSlider", handleTotalSizeInput);
+  document.getElementById("cameraPreset")?.addEventListener("change", (e) => {
+    applyCameraPreset((e.target as HTMLSelectElement).value);
+  });
+  // Editing a distance recomputes the tag size for that threshold; the
+  // Reliable distance -> tag size (gated behind the override checkbox)
+  document.getElementById("rangeReliableInput")?.addEventListener("input", () => {
+    handleRangeDistanceInput();
+  });
+  document.getElementById("rangeOverride")?.addEventListener("change", () => {
+    // Reveal/hide the row and sync the input from the current readout
+    scheduleRecompute();
+  });
   form?.addEventListener("input", scheduleRecompute);
   form?.addEventListener("change", scheduleRecompute);
   document.getElementById("downloadBtn")?.addEventListener("click", () => {
