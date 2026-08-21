@@ -283,8 +283,9 @@ function buildRangeEstimatorMarkup(): string {
       <legend>Detection Range</legend>
       <div style="margin-bottom:0.35rem">
         Reliably detected up to
+        <span id="rangeReliableText" style="color:#888">—</span>
         <input id="rangeReliableInput" class="no-spin" type="number"
-               min="0.05" max="100" step="0.1" style="width:4em; margin:0 0.25rem"> m away
+               min="0.05" max="100" step="0.1" style="width:4em; display:none"> m away
         <span class="note" id="rangeTilt" style="display:inline; margin-left:0.4rem">—</span>
       </div>
       <label>Camera
@@ -293,11 +294,11 @@ function buildRangeEstimatorMarkup(): string {
       <div style="margin-top:0.25rem">
         <label>HFOV
           <input id="cameraHfov" class="no-spin" type="number"
-                 min="1" max="179" step="0.5" value="${def.hfovDeg}" style="width:4em; margin:0 0.25rem"> °
+                 min="1" max="179" step="0.5" value="${def.hfovDeg}" style="width:4em"> °
         </label>
         <label style="margin-left:0.6rem">Width
           <input id="cameraWidth" class="no-spin" type="number"
-                 min="1" step="1" value="${def.widthPx}" style="width:4em; margin:0 0.25rem"> px
+                 min="1" step="1" value="${def.widthPx}" style="width:4em"> px
         </label>
       </div>
       <div style="margin-top:0.4rem">
@@ -354,10 +355,11 @@ function updateRangeEstimator(
   setNoteText("rangeFootnote", notes.rangeFootnote);
   const tiltEl = document.getElementById("rangeTilt");
   const reliableInput = document.getElementById("rangeReliableInput") as HTMLInputElement | null;
+  const reliableText = document.getElementById("rangeReliableText") as HTMLElement | null;
   const overrideBox = document.getElementById("rangeOverride") as HTMLInputElement | null;
   const hfovEl = document.getElementById("cameraHfov") as HTMLInputElement | null;
   const widthEl = document.getElementById("cameraWidth") as HTMLInputElement | null;
-  if (!tiltEl || !reliableInput || !overrideBox || !hfovEl || !widthEl) return;
+  if (!tiltEl || !reliableInput || !reliableText || !overrideBox || !hfovEl || !widthEl) return;
 
   const cam = readCameraState();
   const camValid =
@@ -373,15 +375,21 @@ function updateRangeEstimator(
   // Grey out HFOV/Width when a preset is selected (only Custom is editable)
   hfovEl.disabled = !isCustom;
   widthEl.disabled = !isCustom;
-  // Reliable distance input is greyed until the override is checked
-  reliableInput.disabled = !overrideBox.checked || !camValid || !hasFamily;
+
+  // Toggle between plain text (greyed) and input box based on override
+  const editing = overrideBox.checked;
+  reliableText.style.display = editing ? "none" : "";
+  reliableInput.style.display = editing ? "" : "none";
+  reliableInput.disabled = !editing || !camValid || !hasFamily;
 
   if (!hasFamily) {
+    reliableText.textContent = "—";
     if (document.activeElement !== reliableInput) reliableInput.value = "";
     tiltEl.textContent = "—";
     return;
   }
   if (!camValid || !tagValid) {
+    reliableText.textContent = "—";
     if (document.activeElement !== reliableInput) reliableInput.value = "";
     tiltEl.textContent = "—";
     return;
@@ -389,10 +397,12 @@ function updateRangeEstimator(
 
   const camera: CameraSpec = { hfovDeg: cam.hfovDeg, widthPx: cam.widthPx };
   const r = estimateRange(family.geometry.detection, tagSize_mm, camera);
+  const distStr = formatDistanceInput(r.reliable_m);
+  reliableText.textContent = distStr || "—";
   tiltEl.textContent = `· up to ~${r.maxViewAngleDeg}° tilt`;
-  // Sync the input when not being edited — shows the computed distance even while disabled
+  // Sync the input when not being edited — shows the computed distance when editable
   if (document.activeElement !== reliableInput) {
-    reliableInput.value = formatDistanceInput(r.reliable_m);
+    reliableInput.value = distStr;
   }
 }
 
