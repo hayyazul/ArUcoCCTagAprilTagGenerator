@@ -241,14 +241,13 @@ function familyNotes(family: Family | undefined): {
       tagSize: "tag dimension",
       totalSize: "tag plus its quiet zone on every side; edit either, the other follows",
       quietZoneAuto: "auto = small cutting buffer outside the marker",
-      rangeFootnote: "pick a family to see detection thresholds",
+      rangeFootnote: "",
     };
   }
-  const det = family.geometry.detection;
-  const rangeFootnote =
-    det.kind === "px-per-bit"
-      ? `${family.name}: ~${det.pxPerBitReliable} px/bit reliable, ~${det.pxPerBitEdge} px/bit edge (Olson)`
-      : `${family.name}: ≥${det.pxDiameterEdge} px outer disk (CCTag manual); reliable at ~${det.pxDiameterReliable} px`;
+  // Detection footnote is intentionally empty in-box; full sources live in
+  // the footer Related links. Keep the field for future per-family hints
+  // without cluttering the estimator.
+  const rangeFootnote = "";
   if (family.group === "ArUco") {
     return {
       tagSize: "edge of the printed marker (black border included) — what detectors expect",
@@ -281,43 +280,32 @@ function buildRangeEstimatorMarkup(): string {
   const def = CAMERA_PRESETS.find((p) => p.id === "iphone-wide") ?? CAMERA_PRESETS[0]!;
   return `
     <fieldset>
-      <legend>Detection Range — Estimator</legend>
-      <span class="note">How far this size can be detected depends on the viewing camera. Numbers are a resolution-based ceiling — lighting, motion blur, focus, or glare only shorten them.</span>
-      <details>
-        <summary style="cursor:pointer">Show estimator</summary>
-        <div style="margin-top:0.5rem">
-          <label>Camera
-            <select id="cameraPreset">${opts}</select>
-          </label>
-          <span class="note">Presets are nominal manufacturer specs; edit HFOV/width to match your camera.</span>
-          <div>
-            <label>HFOV
-              <input id="cameraHfov" class="no-spin" type="number"
-                     min="1" max="179" step="0.5" value="${def.hfovDeg}">°
-            </label>
-            <label>Width
-              <input id="cameraWidth" class="no-spin" type="number"
-                     min="1" step="1" value="${def.widthPx}">px
-            </label>
-          </div>
-          <span class="note">Pinhole focal length ≈ (width/2)/tan(HFOV/2); no distortion model.</span>
-          <div style="margin-top:0.5rem">
-            <label>Reliable up to
-              <input id="rangeReliableInput" class="no-spin" type="number"
-                     min="0.05" max="100" step="0.1"> m
-            </label>
-            <span class="note">High confidence — about 10 px per bit (AprilTag/ArUco) or ~100 px outer diameter (CCTag). Stable detection; edit the distance to resize the tag.</span>
-            <label>Edge (last-ditch) up to
-              <input id="rangeEdgeInput" class="no-spin" type="number"
-                     min="0.05" max="100" step="0.1"> m
-            </label>
-            <span class="note">Minimal — about 5 px per bit or ~60 px diameter. May detect but misses climb; beyond this it usually fails. Edit to resize.</span>
-          </div>
-          <span class="note" id="rangeTilt">—</span>
-          <span class="note" id="rangeFootnote">—</span>
-          <span class="note">Sources: AprilTag — Olson 2011 “AprilTag: A robust and flexible visual fiducial system” (~10 px/bit reliable, ~5 px/bit edge); CCTag — manual “no less than ~30 px radius for the external ring” (edge ≈60 px diam, reliable ≈100 px diam, conservative). Tilt limit is informational, not in the formula.</span>
-        </div>
-      </details>
+      <legend>Detection Range</legend>
+      <div style="margin-bottom:0.35rem">
+        <span id="rangeReliableReadout">—</span>
+        <span class="note" id="rangeTilt" style="display:inline; margin-left:0.4rem">—</span>
+      </div>
+      <label>Camera
+        <select id="cameraPreset">${opts}</select>
+      </label>
+      <label>HFOV
+        <input id="cameraHfov" class="no-spin" type="number"
+               min="1" max="179" step="0.5" value="${def.hfovDeg}">°
+      </label>
+      <label>Width
+        <input id="cameraWidth" class="no-spin" type="number"
+               min="1" step="1" value="${def.widthPx}">px
+      </label>
+      <div style="margin-top:0.4rem">
+        <label><input type="checkbox" id="rangeOverride"> Set tag size from distance</label>
+      </div>
+      <div id="rangeOverrideRow" style="display:none; margin-top:0.3rem">
+        <label>Reliable up to
+          <input id="rangeReliableInput" class="no-spin" type="number"
+                 min="0.05" max="100" step="0.1"> m
+        </label>
+      </div>
+      <span class="note" id="rangeFootnote" style="margin-top:0.35rem">—</span>
     </fieldset>
   `;
 }
@@ -366,10 +354,12 @@ function updateRangeEstimator(
   notes: ReturnType<typeof familyNotes>,
 ): void {
   setNoteText("rangeFootnote", notes.rangeFootnote);
-  const reliableInput = document.getElementById("rangeReliableInput") as HTMLInputElement | null;
-  const edgeInput = document.getElementById("rangeEdgeInput") as HTMLInputElement | null;
+  const readout = document.getElementById("rangeReliableReadout");
   const tiltEl = document.getElementById("rangeTilt");
-  if (!reliableInput || !edgeInput || !tiltEl) return;
+  const reliableInput = document.getElementById("rangeReliableInput") as HTMLInputElement | null;
+  const overrideBox = document.getElementById("rangeOverride") as HTMLInputElement | null;
+  const overrideRow = document.getElementById("rangeOverrideRow");
+  if (!readout || !tiltEl || !reliableInput || !overrideBox || !overrideRow) return;
 
   const cam = readCameraState();
   const camValid =
@@ -379,31 +369,39 @@ function updateRangeEstimator(
     Number.isFinite(cam.widthPx) &&
     cam.widthPx > 0;
   const tagValid = Number.isFinite(tagSize_mm) && tagSize_mm > 0;
+  const hasFamily = family !== undefined;
 
-  if (!family || !camValid || !tagValid) {
-    if (document.activeElement !== reliableInput) reliableInput.value = "";
-    if (document.activeElement !== edgeInput) edgeInput.value = "";
+  // Toggle the advanced row
+  overrideRow.style.display = overrideBox.checked ? "" : "none";
+  reliableInput.disabled = !overrideBox.checked || !camValid || !hasFamily;
+
+  if (!hasFamily) {
+    readout.textContent = "—";
     tiltEl.textContent = "—";
-    reliableInput.disabled = !camValid || !family;
-    edgeInput.disabled = !camValid || !family;
+    if (document.activeElement !== reliableInput) reliableInput.value = "";
+    return;
+  }
+  if (!camValid || !tagValid) {
+    readout.textContent = "—";
+    tiltEl.textContent = "—";
+    if (document.activeElement !== reliableInput) reliableInput.value = "";
     return;
   }
 
   const camera: CameraSpec = { hfovDeg: cam.hfovDeg, widthPx: cam.widthPx };
   const r = estimateRange(family.geometry.detection, tagSize_mm, camera);
-  // Don't clobber the field the user is currently typing in.
+  // Always-visible readout, e.g. "Reliable up to 1.62 m at 40 mm"
+  readout.textContent = `Reliable up to ${formatDistanceInput(r.reliable_m)} m at ${tagSize_mm.toFixed(1)} mm`;
+  tiltEl.textContent = `· up to ~${r.maxViewAngleDeg}° tilt`;
+  // Sync the gated input when not being edited
   if (document.activeElement !== reliableInput) {
     reliableInput.value = formatDistanceInput(r.reliable_m);
   }
-  if (document.activeElement !== edgeInput) {
-    edgeInput.value = formatDistanceInput(r.edge_m);
-  }
-  reliableInput.disabled = false;
-  edgeInput.disabled = false;
-  tiltEl.textContent = `Up to ~${r.maxViewAngleDeg}° tilt — informational, not in the distance formula`;
 }
 
-function handleRangeDistanceInput(threshold: "reliable" | "edge"): void {
+function handleRangeDistanceInput(): void {
+  const overrideBox = document.getElementById("rangeOverride") as HTMLInputElement | null;
+  if (!overrideBox?.checked) return;
   const s = readForm();
   const family = getFamily(s.family);
   if (!family) return;
@@ -417,14 +415,15 @@ function handleRangeDistanceInput(threshold: "reliable" | "edge"): void {
   ) {
     return;
   }
-  const id = threshold === "reliable" ? "rangeReliableInput" : "rangeEdgeInput";
-  const target_m = Number.parseFloat((document.getElementById(id) as HTMLInputElement | null)?.value ?? "");
+  const target_m = Number.parseFloat(
+    (document.getElementById("rangeReliableInput") as HTMLInputElement | null)?.value ?? "",
+  );
   if (!Number.isFinite(target_m) || target_m <= 0) return;
   const newSize = minTagSizeForDistance(
     family.geometry.detection,
     target_m,
     { hfovDeg: cam.hfovDeg, widthPx: cam.widthPx },
-    threshold,
+    "reliable",
   );
   const tagInput = field("tagSize") as HTMLInputElement;
   tagInput.value = String(newSize);
@@ -1492,12 +1491,13 @@ function bootstrap(): void {
     applyCameraPreset((e.target as HTMLSelectElement).value);
   });
   // Editing a distance recomputes the tag size for that threshold; the
-  // resulting tagSize input event then drives the normal recompute.
+  // Reliable distance -> tag size (gated behind the override checkbox)
   document.getElementById("rangeReliableInput")?.addEventListener("input", () => {
-    handleRangeDistanceInput("reliable");
+    handleRangeDistanceInput();
   });
-  document.getElementById("rangeEdgeInput")?.addEventListener("input", () => {
-    handleRangeDistanceInput("edge");
+  document.getElementById("rangeOverride")?.addEventListener("change", () => {
+    // Reveal/hide the row and sync the input from the current readout
+    scheduleRecompute();
   });
   form?.addEventListener("input", scheduleRecompute);
   form?.addEventListener("change", scheduleRecompute);
