@@ -83,6 +83,21 @@ describe("CCTagFamily", () => {
     expect(f.geometry.outerRadiusCells).toBe(2.5);
   });
 
+  it("declares a px-per-disk-diameter detection model", () => {
+    const f = new CCTagFamily({
+      name: "cctag3",
+      ringsPerMarker: 5,
+      count: 1,
+      dataPath: "cctag3.txt",
+    });
+    expect(f.geometry.detection).toEqual({
+      kind: "px-per-disk-diameter",
+      pxDiameterReliable: 100,
+      pxDiameterEdge: 60,
+      maxViewAngleDeg: 80,
+    });
+  });
+
   it("throws RangeError on out-of-range id", async () => {
     installFakeFetch(CCTAG4_SAMPLE);
     const f = new CCTagFamily({

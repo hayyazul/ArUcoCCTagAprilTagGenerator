@@ -62,6 +62,19 @@ export class CCTagFamily implements Family {
       widthAtBorder: 5,
       outerShape: "circle",
       outerRadiusCells: 2.5,
+      // CCTag's detector works on the ring-radius geometry, not a bit
+      // grid. The published guidance (CCTag manual) is "no less than ~30
+      // px of radius for the external ring" — used here as the edge
+      // threshold (60 px outer disk diameter). Reliable is set to ~100
+      // px diameter — conservative, since the manual gives only a floor.
+      // CCTag is documented as robust to highly skewed perspectives;
+      // 80° is a conservative reliable ceiling.
+      detection: {
+        kind: "px-per-disk-diameter",
+        pxDiameterReliable: 100,
+        pxDiameterEdge: 60,
+        maxViewAngleDeg: 80,
+      },
     };
   }
 

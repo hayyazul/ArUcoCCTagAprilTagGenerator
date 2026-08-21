@@ -19,10 +19,22 @@ export {
   type MarkerProvider,
 } from "./family";
 
-import type { Family } from "./family";
+import type { DetectionModel, Family } from "./family";
 import { ArucoFamily } from "./aruco-family";
 import { CCTagFamily } from "./cctag-family";
 import { MosaicFamily } from "./mosaic-family";
+
+/** Olson's published px/bit thresholds, shared by every AprilTag family
+ *  (square and circle). The detector decodes by sampling each bit cell,
+ *  so the threshold is per-bit; `bits` is the detected edge (which
+ *  matches each family's `widthAtBorder`). */
+const aprilTagDetection = (bits: number): DetectionModel => ({
+  kind: "px-per-bit",
+  bits,
+  pxPerBitReliable: 10,
+  pxPerBitEdge: 5,
+  maxViewAngleDeg: 60,
+});
 
 const ARUCO_DICT_BASE = `${import.meta.env.BASE_URL}resources/aruco_dictionaries`;
 const APRILTAG_BASE = `${import.meta.env.BASE_URL}resources/apriltag`;
@@ -64,7 +76,7 @@ const FAMILIES: Family[] = [
     group: "AprilTag",
     count: 30,
     chunkSize: 30,
-    geometry: { edge: 8, widthAtBorder: 6, outerShape: "square" },
+    geometry: { edge: 8, widthAtBorder: 6, outerShape: "square", detection: aprilTagDetection(6) },
     chunkBasePath: `${APRILTAG_BASE}/tag16h5`,
   }),
   new MosaicFamily({
@@ -72,7 +84,7 @@ const FAMILIES: Family[] = [
     group: "AprilTag",
     count: 35,
     chunkSize: 35,
-    geometry: { edge: 9, widthAtBorder: 7, outerShape: "square" },
+    geometry: { edge: 9, widthAtBorder: 7, outerShape: "square", detection: aprilTagDetection(7) },
     chunkBasePath: `${APRILTAG_BASE}/tag25h9`,
   }),
   new MosaicFamily({
@@ -80,7 +92,7 @@ const FAMILIES: Family[] = [
     group: "AprilTag",
     count: 587,
     chunkSize: 587,
-    geometry: { edge: 10, widthAtBorder: 8, outerShape: "square" },
+    geometry: { edge: 10, widthAtBorder: 8, outerShape: "square", detection: aprilTagDetection(8) },
     chunkBasePath: `${APRILTAG_BASE}/tag36h11`,
   }),
   new MosaicFamily({
@@ -88,7 +100,7 @@ const FAMILIES: Family[] = [
     group: "AprilTag",
     count: 2115,
     chunkSize: 2115,
-    geometry: { edge: 9, widthAtBorder: 5, outerShape: "square" },
+    geometry: { edge: 9, widthAtBorder: 5, outerShape: "square", detection: aprilTagDetection(5) },
     chunkBasePath: `${APRILTAG_BASE}/tagStandard41h12`,
   }),
   new MosaicFamily({
@@ -96,7 +108,7 @@ const FAMILIES: Family[] = [
     group: "AprilTag",
     count: 48714,
     chunkSize: 256,
-    geometry: { edge: 10, widthAtBorder: 6, outerShape: "square" },
+    geometry: { edge: 10, widthAtBorder: 6, outerShape: "square", detection: aprilTagDetection(6) },
     chunkBasePath: `${APRILTAG_BASE}/tagStandard52h13`,
   }),
   new MosaicFamily({
@@ -109,6 +121,7 @@ const FAMILIES: Family[] = [
       widthAtBorder: 6,
       outerShape: "square",
       centerBlock: { row: 4, col: 4, size: 2 },
+      detection: aprilTagDetection(6),
     },
     chunkBasePath: `${APRILTAG_BASE}/tagCustom48h12`,
   }),
@@ -124,6 +137,7 @@ const FAMILIES: Family[] = [
       // Smallest circle centred on the tile that encloses every occupied
       // cell of any tag in the family. See scripts/measure-circle-geometry.py.
       outerRadiusCells: 4.949747468305833,
+      detection: aprilTagDetection(5),
     },
     chunkBasePath: `${APRILTAG_BASE}/tagCircle21h7`,
   }),
@@ -137,6 +151,7 @@ const FAMILIES: Family[] = [
       widthAtBorder: 5,
       outerShape: "circle",
       outerRadiusCells: 5.70087712549569,
+      detection: aprilTagDetection(5),
     },
     chunkBasePath: `${APRILTAG_BASE}/tagCircle49h12`,
   }),
